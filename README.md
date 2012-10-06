@@ -9,6 +9,6 @@ http://forum.qnap.com/viewtopic.php?p=286796
 Source for the bash script based on GPL code from luca [at-nospam] giovenzana.org
 
 TODO:
-add the script itself to the repository
-add the cronjob
-add the syslog lines
+-add the script itself to the repository
+-add the cronjob
+-add the syslog lines
