@@ -1,0 +1,104 @@
+#!/bin/bash
+# QNAP fancontrol 0.7 beta
+# arignal author: luca [at-nospam] giovenzana.org GPL of course ;)
+# Changes by Paul.Cobbaut [at-nospam] gmail also GPL
+## syslog integration with logger utility
+## check for standby disks before running hddtemp (hddtemp activates sleeping drives)
+## and more ;-)
+
+#
+# suggested crontab entry
+#
+#*/2 * * * * if [ -x /usr/local/bin/qnap-fancontrol ]; then /usr/local/bin/qnap-fancontrol ; fi
+
+#
+# suggested entries for rsyslog
+# (The first three are only enabled when debugging the script)
+#
+#local6.debug                    /var/log/qnap-fan-debug.log
+#local6.notice                   /var/log/qnap-fan-notice.log
+#local6.warning                  /var/log/qnap-fan-warning.log
+#local6.err                      /var/log/qnap-fan.log
+
+
+HDDTEMP="/usr/sbin/hddtemp -n"
+QCONTROL="/usr/sbin/qcontrol"
+HDPARM="/sbin/hdparm"
+
+# Check for dependencies
+if [ ! -x $QCONTROL ] || [ ! -x $HDDTEMP ] || [ ! -x $HDPARM ] ; then
+   echo "Dependencies are not satisfied you need qcontrol, hddtemp and hdparm."
+   exit 1
+fi
+
+TEMPERATURE=-1
+FANSPEED='full'
+LOGLEVEL='debug'
+FACILITY='local6'
+
+# Value will be 'standby' when disks are sleeping.
+# Replace sdb/sdc/sdd/sde with your disks (probaly sda/sdb/...)
+DRIVEBSTATE=`$HDPARM -C /dev/sdb | tail -1 | tr -s ' ' | cut -d' ' -f5`
+DRIVECSTATE=`$HDPARM -C /dev/sdc | tail -1 | tr -s ' ' | cut -d' ' -f5`
+DRIVEDSTATE=`$HDPARM -C /dev/sdd | tail -1 | tr -s ' ' | cut -d' ' -f5`
+DRIVEESTATE=`$HDPARM -C /dev/sde | tail -1 | tr -s ' ' | cut -d' ' -f5`
+
+# check that drivers are active (or standby), and set FANSPEED to silence if they are
+if [ $DRIVEBSTATE = 'standby' -o $DRIVECSTATE = 'standby' -o $DRIVEDSTATE = 'standby' -o $DRIVEESTATE = 'standby' ];
+ then
+      FANSPEED='silence' && logger -p $FACILITY.$LOGLEVEL "Disk are sleeping, fanspeed is $FANSPEED"
+ else 
+      # Drives are active, thus higher temperature value will be considered
+      for DEV in /dev/sd[bcde] ; do
+        if [ $($HDDTEMP $DEV) -ge $TEMPERATURE ]; then
+           TEMPERATURE=$($HDDTEMP $DEV)
+        fi
+      done
+      # Compare temperatures and adjust fan speed
+      if [ $TEMPERATURE -gt 0 ] && [ $TEMPERATURE -le 33 ]; then
+       FANSPEED='stop'
+       LOGLEVEL='notice'
+      elif [ $TEMPERATURE -gt 33 ] && [ $TEMPERATURE -le 38 ]; then
+       FANSPEED='silence'
+       LOGLEVEL='warning'
+      elif [ $TEMPERATURE -gt 38 ] && [ $TEMPERATURE -le 45 ]; then
+       FANSPEED='medium'
+       LOGLEVEL='warning'
+      elif [ $TEMPERATURE -gt 45 ] && [ $TEMPERATURE -le 50 ]; then
+       FANSPEED='high'
+       LOGLEVEL='alert'
+      else
+       # Any higher values or weird values will cause full speed and warning message
+       FANSPEED='full'
+       LOGLEVEL='emerg'
+    fi
+    # Log temperature and fanspeed 
+    logger -p $FACILITY.$LOGLEVEL "Disk temperature is $TEMPERATURE, fanspeed is $FANSPEED"
+fi
+
+#
+# run qcontrol (always)
+#
+
+# In case the sock wasn't removed or qcontrol is already running
+if [ -e /var/run/qcontrol.sock ]; then
+   /usr/bin/killall qcontrol &> /dev/null
+   sleep 1
+   rm /var/run/qcontrol.sock
+fi
+
+# Starts qcontrol daemon
+$QCONTROL -d &> /dev/null
+sleep 1
+
+# Set fanspeed
+$QCONTROL fanspeed $FANSPEED
+
+# Kill and remove qcontrol daemon sock
+if [ -e /var/run/qcontrol.sock ]; then
+   /usr/bin/killall qcontrol
+   sleep 1
+   rm /var/run/qcontrol.sock
+fi
+exit 0
+
